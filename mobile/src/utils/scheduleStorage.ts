@@ -99,6 +99,22 @@ export const getTodayTakenMedications = async (): Promise<TakenMedication[]> => 
   return takenMeds.filter(med => med.date === today);
 };
 
+export const getTakenMedicationsByMedication = async (
+  medicationId: string,
+  limit: number = 20
+): Promise<TakenMedication[]> => {
+  try {
+    const takenMeds = await getTakenMedications();
+    return takenMeds
+      .filter((med) => med.medicationId === medicationId)
+      .sort((left, right) => right.takenAt.localeCompare(left.takenAt))
+      .slice(0, limit);
+  } catch (error) {
+    console.error('Error getting taken medication history:', error);
+    return [];
+  }
+};
+
 export const clearOldTakenMedications = async (daysToKeep: number = 30): Promise<void> => {
   try {
     const takenMeds = await getTakenMedications();

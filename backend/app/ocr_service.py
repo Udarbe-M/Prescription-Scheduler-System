@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from typing import Optional
 
 import numpy as np
-from PIL import Image
+from PIL import Image, ImageEnhance, ImageFilter, ImageOps
 
 from .config import Settings
 from .parsers import normalize_text, parse_prescription_text
@@ -192,7 +192,27 @@ class OCRManager:
         raw = base64.b64decode(payload)
         if len(raw) > max_bytes:
             raise ValueError(f"Image is too large. Limit is {max_bytes // (1024 * 1024)} MB.")
-        return Image.open(io.BytesIO(raw)).convert("RGB")
+        image = Image.open(io.BytesIO(raw))
+        return OCRManager._prepare_image_for_ocr(image)
+
+    @staticmethod
+    def _prepare_image_for_ocr(image: Image.Image) -> Image.Image:
+        """Lightweight cleanup to improve OCR on prescription photos.
+
+        This does not try to do full document detection, but it does normalize
+        orientation, improve contrast, and sharpen handwriting strokes.
+        """
+        normalized = ImageOps.exif_transpose(image).convert("L")
+        normalized = ImageOps.autocontrast(normalized, cutoff=1)
+        normalized = ImageEnhance.Contrast(normalized).enhance(1.35)
+        normalized = normalized.filter(ImageFilter.SHARPEN)
+
+        max_dimension = 1800
+        width, height = normalized.size
+        if max(width, height) > max_dimension:
+            normalized.thumbnail((max_dimension, max_dimension))
+
+        return normalized.convert("RGB")
 
     def get_model_status(self) -> list[OCRModelStatus]:
         return [

@@ -126,6 +126,19 @@ export default function HomeScreen() {
     return daysRemaining !== null && daysRemaining <= 5;
   }).length;
 
+  const refillForecast = useMemo(
+    () =>
+      [...medications]
+        .map((medication) => ({
+          medication,
+          daysRemaining: getDaysRemaining(medication),
+        }))
+        .filter((item) => item.daysRemaining !== null)
+        .sort((left, right) => (left.daysRemaining ?? 9999) - (right.daysRemaining ?? 9999))
+        .slice(0, 3),
+    [medications]
+  );
+
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
       <View style={[styles.headerCard, { backgroundColor: colors.paper, borderColor: colors.border }]}>
@@ -200,6 +213,44 @@ export default function HomeScreen() {
           })}
         </View>
       </View>
+
+      {refillForecast.length > 0 ? (
+        <View style={[styles.refillCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <View style={styles.refillHeader}>
+            <Text style={[styles.refillTitle, { color: colors.text }]}>Refill forecast</Text>
+            <Text style={[styles.refillSubtitle, { color: colors.textSecondary }]}>
+              Based on saved stock and reminder frequency
+            </Text>
+          </View>
+          {refillForecast.map(({ medication, daysRemaining }) => (
+            <View
+              key={`forecast-${medication.id}`}
+              style={[styles.refillRow, { borderTopColor: colors.border }]}
+            >
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.refillName, { color: colors.text }]}>{medication.name}</Text>
+                <Text style={[styles.refillMeta, { color: colors.textSecondary }]}>
+                  {medication.dosage}
+                </Text>
+              </View>
+              <View style={styles.refillRight}>
+                <Text
+                  style={[
+                    styles.refillDays,
+                    {
+                      color: (daysRemaining ?? 999) <= 5 ? colors.accent : colors.primary,
+                    },
+                  ]}
+                >
+                  {Math.max(0, Math.floor(daysRemaining ?? 0))} day
+                  {Math.max(0, Math.floor(daysRemaining ?? 0)) === 1 ? '' : 's'}
+                </Text>
+                <Text style={[styles.refillMeta, { color: colors.textSecondary }]}>remaining</Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
 
       {filteredMedications.length === 0 ? (
         <View style={styles.emptyContainer}>
@@ -315,6 +366,47 @@ const styles = StyleSheet.create({
   list: {
     paddingHorizontal: 16,
     paddingBottom: 20,
+  },
+  refillCard: {
+    marginHorizontal: 16,
+    marginBottom: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 16,
+  },
+  refillHeader: {
+    marginBottom: 8,
+  },
+  refillTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  refillSubtitle: {
+    marginTop: 4,
+    fontSize: 12,
+  },
+  refillRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingTop: 12,
+    marginTop: 12,
+    borderTopWidth: 1,
+  },
+  refillName: {
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  refillMeta: {
+    marginTop: 2,
+    fontSize: 12,
+  },
+  refillRight: {
+    alignItems: 'flex-end',
+  },
+  refillDays: {
+    fontSize: 16,
+    fontWeight: '800',
   },
   emptyContainer: {
     flex: 1,

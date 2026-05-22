@@ -18,6 +18,8 @@ import { Medication } from '../../src/types';
 import { cancelNotification, scheduleNotification } from '../../src/utils/notifications';
 import { enqueuePendingScan } from '../../src/utils/ocrQueueStorage';
 import { ExtractedData, extractTextFromImage, OCRExtractionResult } from '../../src/utils/ocr';
+import { getDaysRemaining } from '../../src/utils/medicationHelpers';
+import { getTakenMedicationsByMedication, TakenMedication } from '../../src/utils/scheduleStorage';
 import {
   addMedication,
   deleteNotificationIds,
@@ -48,6 +50,7 @@ export default function AddMedicationScreen() {
 
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [ocrResult, setOcrResult] = useState<OCRExtractionResult | null>(null);
+  const [takenHistory, setTakenHistory] = useState<TakenMedication[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
   const [isLoadingMed, setIsLoadingMed] = useState(!!id);
   const [medication, setMedication] = useState<Partial<Medication>>({
@@ -76,6 +79,7 @@ export default function AddMedicationScreen() {
         if (existing.imageUri) {
           setImageUri(existing.imageUri);
         }
+        setTakenHistory(await getTakenMedicationsByMedication(existing.id, 8));
       }
     } catch (error) {
       console.error('Error loading medication for edit:', error);
@@ -313,6 +317,22 @@ export default function AddMedicationScreen() {
   const confidencePercent =
     ocrResult?.confidence !== undefined ? Math.round(ocrResult.confidence * 100) : null;
   const showConfidenceWarning = confidencePercent !== null && confidencePercent < 70;
+  const daysRemaining =
+    medication.name && medication.dosage
+      ? getDaysRemaining({
+          id: medication.id || 'preview',
+          name: medication.name,
+          dosage: medication.dosage,
+          frequency: (medication.frequency || 'daily') as Medication['frequency'],
+          times: medication.times || ['09:00'],
+          startDate: medication.startDate || new Date().toISOString().split('T')[0],
+          prescriptionDate: medication.prescriptionDate,
+          instructions: medication.instructions,
+          imageUri: medication.imageUri,
+          quantity: medication.quantity,
+          lowStockThreshold: medication.lowStockThreshold,
+        })
+      : null;
 
   return (
     <ScrollView style={[styles.container, { backgroundColor: colors.background }]}>
@@ -438,6 +458,28 @@ export default function AddMedicationScreen() {
 
       <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
         <Text style={[styles.sectionTitle, { color: colors.text }]}>Medication Details</Text>
+
+        {medication.quantity !== undefined || daysRemaining !== null ? (
+          <View style={[styles.timelineSummary, { backgroundColor: colors.paper, borderColor: colors.border }]}>
+            <View style={styles.timelineMetric}>
+              <Text style={[styles.timelineMetricLabel, { color: colors.textSecondary }]}>Stock</Text>
+              <Text style={[styles.timelineMetricValue, { color: colors.text }]}>
+                {medication.quantity ?? 'Unknown'}
+              </Text>
+            </View>
+            <View style={styles.timelineMetric}>
+              <Text style={[styles.timelineMetricLabel, { color: colors.textSecondary }]}>Days left</Text>
+              <Text
+                style={[
+                  styles.timelineMetricValue,
+                  { color: daysRemaining !== null && daysRemaining <= 5 ? colors.accent : colors.primary },
+                ]}
+              >
+                {daysRemaining !== null ? Math.max(0, Math.floor(daysRemaining)) : '--'}
+              </Text>
+            </View>
+          </View>
+        ) : null}
 
         <Text style={[styles.label, { color: colors.textSecondary }]}>Medication Name</Text>
         <TextInput
@@ -581,6 +623,57 @@ export default function AddMedicationScreen() {
           </Text>
         </TouchableOpacity>
       </View>
+
+      {isEditMode ? (
+        <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.sectionTitle, { color: colors.text }]}>Medication Timeline</Text>
+          <View style={styles.timelineList}>
+            <View style={styles.timelineItem}>
+              <View style={[styles.timelineDot, { backgroundColor: colors.primary }]} />
+              <View style={styles.timelineContent}>
+                <Text style={[styles.timelineTitle, { color: colors.text }]}>Prescription dated</Text>
+                <Text style={[styles.timelineBody, { color: colors.textSecondary }]}>
+                  {medication.prescriptionDate || 'Not set'}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.timelineItem}>
+              <View style={[styles.timelineDot, { backgroundColor: colors.primarySoft }]} />
+              <View style={styles.timelineContent}>
+                <Text style={[styles.timelineTitle, { color: colors.text }]}>Schedule started</Text>
+                <Text style={[styles.timelineBody, { color: colors.textSecondary }]}>
+                  {medication.startDate || 'Not set'}
+                </Text>
+              </View>
+            </View>
+            <View style={styles.timelineItem}>
+              <View style={[styles.timelineDot, { backgroundColor: colors.accent }]} />
+              <View style={styles.timelineContent}>
+                <Text style={[styles.timelineTitle, { color: colors.text }]}>Saved in archive</Text>
+                <Text style={[styles.timelineBody, { color: colors.textSecondary }]}>
+                  {medication.createdAt || 'Unknown'}
+                </Text>
+              </View>
+            </View>
+            {takenHistory.map((entry) => (
+              <View key={`${entry.takenAt}-${entry.time}`} style={styles.timelineItem}>
+                <View style={[styles.timelineDot, { backgroundColor: '#2e8b57' }]} />
+                <View style={styles.timelineContent}>
+                  <Text style={[styles.timelineTitle, { color: colors.text }]}>Dose marked taken</Text>
+                  <Text style={[styles.timelineBody, { color: colors.textSecondary }]}>
+                    {entry.date} at {entry.time}
+                  </Text>
+                </View>
+              </View>
+            ))}
+            {takenHistory.length === 0 ? (
+              <Text style={[styles.timelineEmpty, { color: colors.textSecondary }]}>
+                No dose history yet. Mark medication as taken from Today&apos;s plan to build the timeline.
+              </Text>
+            ) : null}
+          </View>
+        </View>
+      ) : null}
     </ScrollView>
   );
 }
@@ -801,5 +894,56 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontWeight: '800',
     fontSize: 15,
+  },
+  timelineSummary: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 14,
+    flexDirection: 'row',
+    gap: 18,
+    marginBottom: 10,
+  },
+  timelineMetric: {
+    flex: 1,
+  },
+  timelineMetricLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    textTransform: 'uppercase',
+    marginBottom: 4,
+  },
+  timelineMetricValue: {
+    fontSize: 20,
+    fontWeight: '800',
+  },
+  timelineList: {
+    gap: 14,
+  },
+  timelineItem: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+  },
+  timelineDot: {
+    width: 12,
+    height: 12,
+    borderRadius: 999,
+    marginTop: 4,
+  },
+  timelineContent: {
+    flex: 1,
+  },
+  timelineTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+  },
+  timelineBody: {
+    marginTop: 3,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  timelineEmpty: {
+    fontSize: 13,
+    lineHeight: 19,
   },
 });
