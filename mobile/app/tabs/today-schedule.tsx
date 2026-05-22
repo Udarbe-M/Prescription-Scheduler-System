@@ -1,21 +1,23 @@
-import { useFocusEffect } from 'expo-router';
+import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useState } from 'react';
 import { Alert, FlatList, RefreshControl, StyleSheet, Text, View } from 'react-native';
 
+import { ActivePatientCard } from '../../src/components/ActivePatientCard';
 import { ScheduleItem } from '../../src/components/ScheduleItem';
 import { useTheme } from '../../src/context/ThemeContext';
-import { Medication, ScheduleItem as ScheduleItemType } from '../../src/types';
+import { Medication, PatientProfile, ScheduleItem as ScheduleItemType } from '../../src/types';
 import { getWeeklySummary } from '../../src/utils/adherence';
+import { getActivePatient } from '../../src/utils/patientStorage';
 import {
+  getTakenMedications,
   isTakenToday,
   markAsNotTaken,
   markAsTaken,
-  getTakenMedications,
 } from '../../src/utils/scheduleStorage';
 import {
   decrementMedicationQuantity,
   incrementMedicationQuantity,
-  loadMedications,
+  loadMedicationsByPatient,
 } from '../../src/utils/storage';
 
 const buildTodaySchedule = (medications: Medication[]): ScheduleItemType[] => {
@@ -50,13 +52,16 @@ const buildTodaySchedule = (medications: Medication[]): ScheduleItemType[] => {
 };
 
 export default function TodayScheduleScreen() {
+  const router = useRouter();
+  const [activePatient, setActivePatient] = useState<PatientProfile | null>(null);
   const [schedule, setSchedule] = useState<ScheduleItemType[]>([]);
   const [refreshing, setRefreshing] = useState(false);
   const [weeklySummary, setWeeklySummary] = useState<ReturnType<typeof getWeeklySummary> | null>(null);
   const { colors } = useTheme();
 
   const loadSchedule = useCallback(async () => {
-    const medications = await loadMedications();
+    const patient = await getActivePatient();
+    const medications = await loadMedicationsByPatient(patient.id);
     const items = buildTodaySchedule(medications);
     const takenHistory = await getTakenMedications();
 
@@ -68,6 +73,7 @@ export default function TodayScheduleScreen() {
     );
 
     itemsWithStatus.sort((a, b) => a.time.localeCompare(b.time));
+    setActivePatient(patient);
     setSchedule(itemsWithStatus);
     setWeeklySummary(getWeeklySummary(medications, takenHistory));
   }, []);
@@ -145,6 +151,16 @@ export default function TodayScheduleScreen() {
 
   return (
     <View style={[styles.container, { backgroundColor: colors.background }]}>
+      {activePatient ? (
+        <View style={styles.patientWrap}>
+          <ActivePatientCard
+            patient={activePatient}
+            medicationCount={schedule.length}
+            onManage={() => router.push('/tabs/patients')}
+          />
+        </View>
+      ) : null}
+
       <View style={[styles.progressCard, { backgroundColor: colors.paper, borderColor: colors.border }]}>
         <Text style={[styles.dateText, { color: colors.textSecondary }]}>{dateString}</Text>
         <Text style={[styles.progressTitle, { color: colors.text }]}>
@@ -246,6 +262,9 @@ const styles = StyleSheet.create({
   container: {
     flex: 1,
     padding: 16,
+  },
+  patientWrap: {
+    marginBottom: 14,
   },
   progressCard: {
     borderRadius: 22,

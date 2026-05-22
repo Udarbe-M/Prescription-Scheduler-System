@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useEffect, useState } from 'react';
 import {
   Alert,
@@ -9,8 +10,9 @@ import {
   View,
 } from 'react-native';
 
+import { ActivePatientCard } from '../../src/components/ActivePatientCard';
 import { useTheme } from '../../src/context/ThemeContext';
-import { Medication, PendingOCRScan } from '../../src/types';
+import { Medication, PatientProfile, PendingOCRScan } from '../../src/types';
 import { addMedication } from '../../src/utils/storage';
 import { cancelAllNotifications } from '../../src/utils/notifications';
 import { ExtractedData, extractTextFromImage, getCurrentAPIUrl, getModelInfo, testAPIConnection } from '../../src/utils/ocr';
@@ -18,6 +20,7 @@ import {
   loadPendingScans,
   removePendingScan,
 } from '../../src/utils/ocrQueueStorage';
+import { DEFAULT_PATIENT_ID, getActivePatient } from '../../src/utils/patientStorage';
 import {
   loadOcrMode,
   OCRMode,
@@ -43,11 +46,13 @@ const candidateToMedication = (
   sourceText: string,
   engine: string,
   confidence: number | undefined,
-  imageUri: string
+  imageUri: string,
+  patientId: string
 ): Medication => {
   const frequency = candidate.frequency || 'daily';
   return {
     id: `${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+    patientId,
     name: candidate.name || 'Review queued prescription',
     dosage: candidate.dosage || 'Review dosage',
     frequency,
@@ -65,7 +70,9 @@ const candidateToMedication = (
 };
 
 export default function SettingsScreen() {
+  const router = useRouter();
   const { theme, toggleTheme, colors } = useTheme();
+  const [activePatient, setActivePatient] = useState<PatientProfile | null>(null);
   const [apiBaseUrl, setApiBaseUrl] = useState('');
   const [ocrMode, setLocalOcrMode] = useState<OCRMode>('auto');
   const [statusMessage, setStatusMessage] = useState('Not tested yet');
@@ -74,6 +81,7 @@ export default function SettingsScreen() {
   const [isRetrying, setIsRetrying] = useState(false);
 
   const loadSettings = async () => {
+    setActivePatient(await getActivePatient());
     setApiBaseUrl(await getCurrentAPIUrl());
     setLocalOcrMode(await loadOcrMode());
     setPendingScans(await loadPendingScans());
@@ -128,7 +136,8 @@ export default function SettingsScreen() {
               extraction.normalizedText,
               extraction.engine,
               extraction.confidence,
-              item.imageUri
+              item.imageUri,
+              activePatient?.id || DEFAULT_PATIENT_ID
             )
           );
           importedCount += 1;
@@ -158,6 +167,15 @@ export default function SettingsScreen() {
           Tune OCR behavior, retry offline scans, and customize your prescription workspace.
         </Text>
       </View>
+
+      {activePatient ? (
+        <View style={styles.patientWrap}>
+          <ActivePatientCard
+            patient={activePatient}
+            onManage={() => router.push('/tabs/patients')}
+          />
+        </View>
+      ) : null}
 
       <View style={styles.section}>
         <Text style={[styles.sectionTitle, { color: colors.textSecondary }]}>Appearance</Text>
@@ -340,6 +358,10 @@ const styles = StyleSheet.create({
   },
   section: {
     marginBottom: 24,
+  },
+  patientWrap: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
   },
   sectionTitle: {
     fontSize: 13,

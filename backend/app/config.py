@@ -29,6 +29,8 @@ class Settings:
     )
     printed_language: str = os.getenv("PRINTED_TEXT_LANGUAGE", "en")
     max_image_size_mb: int = int(os.getenv("MAX_IMAGE_SIZE_MB", "12"))
+    safety_api_timeout_seconds: int = int(os.getenv("SAFETY_API_TIMEOUT_SECONDS", "12"))
+    openfda_api_key: str | None = os.getenv("OPENFDA_API_KEY")
     enable_prescription_model: bool = _as_bool(
         os.getenv("ENABLE_PRESCRIPTION_MODEL"),
         default=True,

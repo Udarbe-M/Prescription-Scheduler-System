@@ -7,6 +7,7 @@ from pydantic import BaseModel, Field
 
 OCRMode = Literal["auto", "printed", "handwritten", "prescription"]
 ScheduleFrequency = Literal["daily", "twice", "thrice", "weekly"]
+InteractionSeverity = Literal["high", "moderate", "info"]
 
 
 class OCRRequest(BaseModel):
@@ -53,3 +54,40 @@ class HealthResponse(BaseModel):
     app_version: str
     default_ocr_mode: str
     models: list[OCRModelStatus]
+
+
+class InteractionMedicationInput(BaseModel):
+    name: str
+    dosage: Optional[str] = None
+
+
+class InteractionMedicationMatch(BaseModel):
+    name: str
+    dosage: Optional[str] = None
+    normalized_name: Optional[str] = None
+    rxcui: Optional[str] = None
+    label_brand_names: list[str] = Field(default_factory=list)
+    label_generic_names: list[str] = Field(default_factory=list)
+    label_found: bool = False
+
+
+class InteractionAlert(BaseModel):
+    medications: list[str] = Field(default_factory=list)
+    severity: InteractionSeverity
+    section: str
+    summary: str
+    evidence_excerpt: Optional[str] = None
+
+
+class InteractionCheckRequest(BaseModel):
+    medications: list[InteractionMedicationInput] = Field(default_factory=list)
+    max_alerts: int = Field(default=8, ge=1, le=20)
+
+
+class InteractionCheckResponse(BaseModel):
+    success: bool
+    checked_at: str
+    medications: list[InteractionMedicationMatch] = Field(default_factory=list)
+    alerts: list[InteractionAlert] = Field(default_factory=list)
+    unresolved_medications: list[str] = Field(default_factory=list)
+    disclaimer: str

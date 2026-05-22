@@ -1,12 +1,21 @@
 import AsyncStorage from 'expo-sqlite/kv-store';
 import { Medication } from '../types';
+import { DEFAULT_PATIENT_ID } from './patientStorage';
 
 const MEDICATIONS_KEY = '@medications';
 const NOTIFICATION_IDS_KEY = '@notification_ids';
 
+const normalizeMedication = (medication: Medication): Medication => ({
+  ...medication,
+  patientId: medication.patientId || DEFAULT_PATIENT_ID,
+});
+
 export const saveMedications = async (medications: Medication[]): Promise<void> => {
   try {
-    await AsyncStorage.setItem(MEDICATIONS_KEY, JSON.stringify(medications));
+    await AsyncStorage.setItem(
+      MEDICATIONS_KEY,
+      JSON.stringify(medications.map(normalizeMedication))
+    );
   } catch (error) {
     console.error('Error saving medications:', error);
     throw error;
@@ -16,18 +25,23 @@ export const saveMedications = async (medications: Medication[]): Promise<void> 
 export const loadMedications = async (): Promise<Medication[]> => {
   try {
     const data = await AsyncStorage.getItem(MEDICATIONS_KEY);
-    return data ? JSON.parse(data) : [];
+    return data ? (JSON.parse(data) as Medication[]).map(normalizeMedication) : [];
   } catch (error) {
     console.error('Error loading medications:', error);
     return [];
   }
 };
 
+export const loadMedicationsByPatient = async (patientId: string): Promise<Medication[]> => {
+  const medications = await loadMedications();
+  return medications.filter((medication) => medication.patientId === patientId);
+};
+
 export const addMedication = async (medication: Medication): Promise<void> => {
   try {
     const medications = await loadMedications();
     medications.push({
-      ...medication,
+      ...normalizeMedication(medication),
       createdAt: medication.createdAt ?? new Date().toISOString(),
       prescriptionDate: medication.prescriptionDate ?? new Date().toISOString().split('T')[0],
     });
@@ -44,7 +58,7 @@ export const updateMedication = async (id: string, updatedMedication: Partial<Me
     const index = medications.findIndex(med => med.id === id);
 
     if (index !== -1) {
-      medications[index] = { ...medications[index], ...updatedMedication };
+      medications[index] = normalizeMedication({ ...medications[index], ...updatedMedication });
       await saveMedications(medications);
     }
   } catch (error) {

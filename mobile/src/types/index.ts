@@ -1,5 +1,6 @@
 export interface Medication {
   id: string;
+  patientId: string;
   name: string;
   dosage: string;
   frequency: 'daily' | 'twice' | 'thrice' | 'weekly';
@@ -27,6 +28,46 @@ export interface PendingOCRScan {
   createdAt: string;
   status: 'queued' | 'failed';
   errorMessage?: string;
+}
+
+export interface PatientProfile {
+  id: string;
+  name: string;
+  relationship: string;
+  birthDate?: string;
+  doctorName?: string;
+  doctorPhone?: string;
+  pharmacyName?: string;
+  pharmacyPhone?: string;
+  notes?: string;
+  createdAt: string;
+}
+
+export interface InteractionAlert {
+  medications: string[];
+  severity: 'high' | 'moderate' | 'info';
+  section: string;
+  summary: string;
+  evidence_excerpt?: string;
+}
+
+export interface InteractionMedicationMatch {
+  name: string;
+  dosage?: string;
+  normalized_name?: string;
+  rxcui?: string;
+  label_brand_names: string[];
+  label_generic_names: string[];
+  label_found: boolean;
+}
+
+export interface InteractionCheckResult {
+  success: boolean;
+  checked_at: string;
+  medications: InteractionMedicationMatch[];
+  alerts: InteractionAlert[];
+  unresolved_medications: string[];
+  disclaimer: string;
 }
 
 export interface User {

@@ -1,6 +1,7 @@
 import { useFocusEffect, useRouter } from 'expo-router';
 import React, { useCallback, useMemo, useState } from 'react';
 import {
+  Alert,
   FlatList,
   RefreshControl,
   StyleSheet,
@@ -10,16 +11,21 @@ import {
   View,
 } from 'react-native';
 
+import { ActivePatientCard } from '../../src/components/ActivePatientCard';
 import { MedicationCard } from '../../src/components/MedicationCard';
 import { useTheme } from '../../src/context/ThemeContext';
-import { Medication } from '../../src/types';
+import { InteractionCheckResult, Medication, PatientProfile } from '../../src/types';
+import { exportDoctorSummary } from '../../src/utils/doctorSummary';
 import { getDaysRemaining } from '../../src/utils/medicationHelpers';
 import { cancelNotification } from '../../src/utils/notifications';
+import { getActivePatient } from '../../src/utils/patientStorage';
+import { checkMedicationInteractions } from '../../src/utils/safety';
+import { getTakenMedications } from '../../src/utils/scheduleStorage';
 import {
   deleteMedication,
   deleteNotificationIds,
   getNotificationIds,
-  loadMedications,
+  loadMedicationsByPatient,
 } from '../../src/utils/storage';
 
 type LibraryMode = 'inventory' | 'archive';
@@ -27,19 +33,39 @@ type LibraryMode = 'inventory' | 'archive';
 export default function HomeScreen() {
   const router = useRouter();
   const { colors } = useTheme();
+  const [activePatient, setActivePatient] = useState<PatientProfile | null>(null);
   const [medications, setMedications] = useState<Medication[]>([]);
+  const [interactionResult, setInteractionResult] = useState<InteractionCheckResult | null>(null);
+  const [interactionError, setInteractionError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
   const [query, setQuery] = useState('');
   const [mode, setMode] = useState<LibraryMode>('inventory');
 
   const fetchMedications = useCallback(async () => {
-    const meds = await loadMedications();
+    const patient = await getActivePatient();
+    const meds = await loadMedicationsByPatient(patient.id);
+
     meds.sort((left, right) => {
       const leftDate = left.createdAt || left.prescriptionDate || '';
       const rightDate = right.createdAt || right.prescriptionDate || '';
       return rightDate.localeCompare(leftDate);
     });
+
+    setActivePatient(patient);
     setMedications(meds);
+
+    if (meds.length >= 2) {
+      try {
+        setInteractionError(null);
+        setInteractionResult(await checkMedicationInteractions(meds));
+      } catch (error: any) {
+        setInteractionResult(null);
+        setInteractionError(error.message || 'Unable to run the interaction check right now.');
+      }
+    } else {
+      setInteractionResult(null);
+      setInteractionError(null);
+    }
   }, []);
 
   useFocusEffect(
@@ -78,6 +104,26 @@ export default function HomeScreen() {
 
   const handleEdit = (medication: Medication) => {
     router.push({ pathname: '/tabs/add-medication', params: { id: medication.id } });
+  };
+
+  const handleExportSummary = async () => {
+    if (!activePatient) {
+      return;
+    }
+    if (medications.length === 0) {
+      Alert.alert('No medications yet', 'Add at least one medication before exporting a doctor summary.');
+      return;
+    }
+
+    try {
+      const history = await getTakenMedications();
+      const filteredHistory = history.filter((entry) =>
+        medications.some((medication) => medication.id === entry.medicationId)
+      );
+      await exportDoctorSummary(activePatient, medications, filteredHistory);
+    } catch {
+      Alert.alert('Export failed', 'Unable to create the doctor summary PDF right now.');
+    }
   };
 
   const filteredMedications = useMemo(() => {
@@ -178,6 +224,18 @@ export default function HomeScreen() {
         </View>
       </View>
 
+      {activePatient ? (
+        <View style={styles.patientCardWrap}>
+          <ActivePatientCard
+            patient={activePatient}
+            medicationCount={medications.length}
+            onManage={() => router.push('/tabs/patients')}
+            onSecondaryAction={handleExportSummary}
+            secondaryLabel="Doctor PDF"
+          />
+        </View>
+      ) : null}
+
       <View style={styles.controls}>
         <TextInput
           value={query}
@@ -249,6 +307,45 @@ export default function HomeScreen() {
               </View>
             </View>
           ))}
+        </View>
+      ) : null}
+
+      {interactionResult?.alerts?.length ? (
+        <View style={[styles.safetyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.safetyTitle, { color: colors.text }]}>Interaction review</Text>
+          <Text style={[styles.safetySubtitle, { color: colors.textSecondary }]}>
+            Informational only. Review combinations with a clinician or pharmacist.
+          </Text>
+          {interactionResult.alerts.slice(0, 3).map((alert, index) => (
+            <View
+              key={`${alert.medications.join('-')}-${index}`}
+              style={[styles.safetyRow, { borderTopColor: colors.border }]}
+            >
+              <Text
+                style={[
+                  styles.safetySeverity,
+                  { color: alert.severity === 'high' ? colors.accent : colors.primary },
+                ]}
+              >
+                {alert.severity.toUpperCase()}
+              </Text>
+              <View style={{ flex: 1 }}>
+                <Text style={[styles.safetySummary, { color: colors.text }]}>{alert.summary}</Text>
+                <Text style={[styles.safetyEvidence, { color: colors.textSecondary }]}>
+                  {alert.evidence_excerpt || alert.section}
+                </Text>
+              </View>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {interactionError ? (
+        <View style={[styles.safetyCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
+          <Text style={[styles.safetyTitle, { color: colors.text }]}>Interaction review</Text>
+          <Text style={[styles.safetySubtitle, { color: colors.textSecondary }]}>
+            {interactionError}
+          </Text>
         </View>
       ) : null}
 
@@ -336,6 +433,10 @@ const styles = StyleSheet.create({
   secondaryActionText: {
     fontWeight: '700',
   },
+  patientCardWrap: {
+    paddingHorizontal: 16,
+    paddingBottom: 12,
+  },
   controls: {
     paddingHorizontal: 16,
     paddingBottom: 8,
@@ -407,6 +508,44 @@ const styles = StyleSheet.create({
   refillDays: {
     fontSize: 16,
     fontWeight: '800',
+  },
+  safetyCard: {
+    marginHorizontal: 16,
+    marginBottom: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    padding: 16,
+  },
+  safetyTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+  },
+  safetySubtitle: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
+  },
+  safetyRow: {
+    flexDirection: 'row',
+    gap: 12,
+    borderTopWidth: 1,
+    marginTop: 12,
+    paddingTop: 12,
+  },
+  safetySeverity: {
+    width: 68,
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  safetySummary: {
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+  safetyEvidence: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
   },
   emptyContainer: {
     flex: 1,

@@ -6,12 +6,20 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from .config import settings
+from .interaction_service import InteractionService
 from .ocr_service import OCRManager
-from .schemas import HealthResponse, OCRRequest, OCRResponse
+from .schemas import (
+    HealthResponse,
+    InteractionCheckRequest,
+    InteractionCheckResponse,
+    OCRRequest,
+    OCRResponse,
+)
 
 logging.basicConfig(level=logging.INFO)
 
 ocr_manager = OCRManager(settings)
+interaction_service = InteractionService(settings)
 
 app = FastAPI(
     title=settings.app_name,
@@ -41,6 +49,7 @@ def root() -> dict:
             "GET /health": "Backend and OCR model status",
             "GET /ocr/models": "Available OCR engines",
             "POST /ocr/recognize": "Recognize printed or handwritten prescription text",
+            "POST /safety/interactions": "Check current medication labels for interaction warnings",
         },
     }
 
@@ -75,3 +84,14 @@ def recognize_prescription(payload: OCRRequest) -> OCRResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except Exception as exc:  # pragma: no cover - defensive fallback
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/safety/interactions", response_model=InteractionCheckResponse, tags=["safety"])
+def check_interactions(payload: InteractionCheckRequest) -> InteractionCheckResponse:
+    if len(payload.medications) < 2:
+        return interaction_service.check_interactions(payload.medications, payload.max_alerts)
+
+    try:
+        return interaction_service.check_interactions(payload.medications, payload.max_alerts)
+    except Exception as exc:  # pragma: no cover - network/third-party fallback
+        raise HTTPException(status_code=503, detail=f"Safety check unavailable: {exc}") from exc

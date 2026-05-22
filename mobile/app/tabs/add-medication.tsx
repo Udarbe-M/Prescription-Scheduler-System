@@ -1,6 +1,6 @@
 import * as ImagePicker from 'expo-image-picker';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -13,18 +13,22 @@ import {
   View,
 } from 'react-native';
 
+import { ActivePatientCard } from '../../src/components/ActivePatientCard';
 import { useTheme } from '../../src/context/ThemeContext';
-import { Medication } from '../../src/types';
-import { cancelNotification, scheduleNotification } from '../../src/utils/notifications';
-import { enqueuePendingScan } from '../../src/utils/ocrQueueStorage';
-import { ExtractedData, extractTextFromImage, OCRExtractionResult } from '../../src/utils/ocr';
+import { InteractionCheckResult, Medication, PatientProfile } from '../../src/types';
 import { getDaysRemaining } from '../../src/utils/medicationHelpers';
+import { cancelNotification, scheduleNotification } from '../../src/utils/notifications';
+import { ExtractedData, extractTextFromImage, OCRExtractionResult } from '../../src/utils/ocr';
+import { enqueuePendingScan } from '../../src/utils/ocrQueueStorage';
+import { DEFAULT_PATIENT_ID, getActivePatient, loadPatients } from '../../src/utils/patientStorage';
+import { checkMedicationInteractions } from '../../src/utils/safety';
 import { getTakenMedicationsByMedication, TakenMedication } from '../../src/utils/scheduleStorage';
 import {
   addMedication,
   deleteNotificationIds,
   getMedication,
   getNotificationIds,
+  loadMedicationsByPatient,
   saveNotificationIds,
   updateMedication,
 } from '../../src/utils/storage';
@@ -48,12 +52,17 @@ export default function AddMedicationScreen() {
   const isEditMode = !!id;
   const { colors } = useTheme();
 
+  const [activePatient, setActivePatient] = useState<PatientProfile | null>(null);
   const [imageUri, setImageUri] = useState<string | null>(null);
   const [ocrResult, setOcrResult] = useState<OCRExtractionResult | null>(null);
+  const [safetyResult, setSafetyResult] = useState<InteractionCheckResult | null>(null);
+  const [safetyError, setSafetyError] = useState<string | null>(null);
   const [takenHistory, setTakenHistory] = useState<TakenMedication[]>([]);
   const [isProcessing, setIsProcessing] = useState(false);
+  const [isCheckingSafety, setIsCheckingSafety] = useState(false);
   const [isLoadingMed, setIsLoadingMed] = useState(!!id);
   const [medication, setMedication] = useState<Partial<Medication>>({
+    patientId: DEFAULT_PATIENT_ID,
     name: '',
     dosage: '',
     frequency: 'daily',
@@ -65,17 +74,27 @@ export default function AddMedicationScreen() {
     lowStockThreshold: 5,
   });
 
-  useEffect(() => {
-    if (id) {
-      loadExistingMedication(id);
+  const loadPatientContext = useCallback(async (patientId?: string) => {
+    if (patientId) {
+      const patients = await loadPatients();
+      const match = patients.find((patient) => patient.id === patientId);
+      if (match) {
+        setActivePatient(match);
+        return match;
+      }
     }
-  }, [id]);
 
-  const loadExistingMedication = async (medId: string) => {
+    const active = await getActivePatient();
+    setActivePatient(active);
+    return active;
+  }, []);
+
+  const loadExistingMedication = useCallback(async (medId: string) => {
     try {
       const existing = await getMedication(medId);
       if (existing) {
         setMedication(existing);
+        await loadPatientContext(existing.patientId);
         if (existing.imageUri) {
           setImageUri(existing.imageUri);
         }
@@ -86,7 +105,22 @@ export default function AddMedicationScreen() {
     } finally {
       setIsLoadingMed(false);
     }
-  };
+  }, [loadPatientContext]);
+
+  useEffect(() => {
+    const initialize = async () => {
+      if (id) {
+        await loadExistingMedication(id);
+      } else {
+        const patient = await getActivePatient();
+        setActivePatient(patient);
+        setMedication((previous) => ({ ...previous, patientId: patient.id }));
+        setIsLoadingMed(false);
+      }
+    };
+
+    initialize();
+  }, [id, loadExistingMedication]);
 
   const applyDetectedMedication = (fields: ExtractedData) => {
     const frequency = fields.frequency || 'daily';
@@ -156,20 +190,16 @@ export default function AddMedicationScreen() {
         `Detected ${Math.max(extraction.medications.length, 1)} medication candidate(s). Review before saving.`
       );
     } catch (error: any) {
-      Alert.alert(
-        'Scan Failed',
-        error.message || 'The scan could not be processed.',
-        [
-          {
-            text: 'Queue for Later',
-            onPress: async () => {
-              await enqueuePendingScan(uri, error.message);
-              Alert.alert('Queued', 'The prescription image was saved to the retry queue in Settings.');
-            },
+      Alert.alert('Scan Failed', error.message || 'The scan could not be processed.', [
+        {
+          text: 'Queue for Later',
+          onPress: async () => {
+            await enqueuePendingScan(uri, error.message);
+            Alert.alert('Queued', 'The prescription image was saved to the retry queue in Settings.');
           },
-          { text: 'Enter Manually', style: 'cancel' },
-        ]
-      );
+        },
+        { text: 'Enter Manually', style: 'cancel' },
+      ]);
     } finally {
       setIsProcessing(false);
     }
@@ -232,6 +262,48 @@ export default function AddMedicationScreen() {
     await saveNotificationIds(medData.id, notificationIds);
   };
 
+  const runSafetyCheck = async () => {
+    if (!activePatient) {
+      Alert.alert('No active profile', 'Choose a patient profile first.');
+      return;
+    }
+
+    if (!medication.name || !medication.dosage) {
+      Alert.alert('Missing details', 'Add at least a medication name and dosage before checking interactions.');
+      return;
+    }
+
+    setIsCheckingSafety(true);
+    try {
+      const existingMeds = await loadMedicationsByPatient(activePatient.id);
+      const draftMedication: Medication = {
+        id: medication.id || 'draft-check',
+        patientId: activePatient.id,
+        name: medication.name,
+        dosage: medication.dosage,
+        frequency: (medication.frequency || 'daily') as Medication['frequency'],
+        times: medication.times || ['09:00'],
+        startDate: medication.startDate || new Date().toISOString().split('T')[0],
+        prescriptionDate: medication.prescriptionDate || new Date().toISOString().split('T')[0],
+        instructions: medication.instructions,
+        quantity: medication.quantity !== undefined ? Number(medication.quantity) : undefined,
+        lowStockThreshold: medication.lowStockThreshold,
+      };
+
+      const result = await checkMedicationInteractions([
+        ...existingMeds.filter((item) => item.id !== draftMedication.id),
+        draftMedication,
+      ]);
+      setSafetyResult(result);
+      setSafetyError(null);
+    } catch (error: any) {
+      setSafetyResult(null);
+      setSafetyError(error.message || 'Unable to run the interaction check right now.');
+    } finally {
+      setIsCheckingSafety(false);
+    }
+  };
+
   const handleSave = async () => {
     if (!medication.name || !medication.dosage) {
       Alert.alert('Missing Fields', 'Please review medication name and dosage before saving.');
@@ -240,20 +312,19 @@ export default function AddMedicationScreen() {
 
     const medData: Medication = {
       id: isEditMode ? id! : Date.now().toString(),
+      patientId: medication.patientId || activePatient?.id || DEFAULT_PATIENT_ID,
       name: medication.name,
       dosage: medication.dosage,
       frequency: medication.frequency as Medication['frequency'],
       times: medication.times || ['09:00'],
       startDate: medication.startDate || new Date().toISOString().split('T')[0],
-      prescriptionDate:
-        medication.prescriptionDate || new Date().toISOString().split('T')[0],
+      prescriptionDate: medication.prescriptionDate || new Date().toISOString().split('T')[0],
       instructions: medication.instructions,
       imageUri: medication.imageUri || imageUri || undefined,
       sourceText: ocrResult?.normalizedText || medication.sourceText,
       ocrEngine: ocrResult?.engine || medication.ocrEngine,
       ocrConfidence: ocrResult?.confidence ?? medication.ocrConfidence,
-      quantity:
-        medication.quantity !== undefined ? Number(medication.quantity) : undefined,
+      quantity: medication.quantity !== undefined ? Number(medication.quantity) : undefined,
       lowStockThreshold: medication.lowStockThreshold ?? 5,
     };
 
@@ -277,6 +348,7 @@ export default function AddMedicationScreen() {
         const frequency = candidate.frequency || 'daily';
         const medicationToAdd: Medication = {
           id: `${Date.now()}-${Math.random().toString(16).slice(2, 6)}`,
+          patientId: activePatient?.id || DEFAULT_PATIENT_ID,
           name: candidate.name || 'Review Detected Medication',
           dosage: candidate.dosage || 'Review dosage',
           frequency,
@@ -321,6 +393,7 @@ export default function AddMedicationScreen() {
     medication.name && medication.dosage
       ? getDaysRemaining({
           id: medication.id || 'preview',
+          patientId: medication.patientId || activePatient?.id || DEFAULT_PATIENT_ID,
           name: medication.name,
           dosage: medication.dosage,
           frequency: (medication.frequency || 'daily') as Medication['frequency'],
@@ -383,6 +456,15 @@ export default function AddMedicationScreen() {
           </View>
         ) : null}
       </View>
+
+      {activePatient ? (
+        <View style={styles.patientWrap}>
+          <ActivePatientCard
+            patient={activePatient}
+            onManage={() => router.push('/tabs/patients')}
+          />
+        </View>
+      ) : null}
 
       {ocrResult ? (
         <View style={[styles.sectionCard, { backgroundColor: colors.card, borderColor: colors.border }]}>
@@ -505,9 +587,7 @@ export default function AddMedicationScreen() {
             <TextInput
               style={[styles.input, { backgroundColor: colors.paper, borderColor: colors.border, color: colors.text }]}
               value={medication.prescriptionDate}
-              onChangeText={(text) =>
-                setMedication((previous) => ({ ...previous, prescriptionDate: text }))
-              }
+              onChangeText={(text) => setMedication((previous) => ({ ...previous, prescriptionDate: text }))}
               placeholder="YYYY-MM-DD"
               placeholderTextColor={colors.textSecondary}
             />
@@ -553,12 +633,7 @@ export default function AddMedicationScreen() {
                   }))
                 }
               >
-                <Text
-                  style={[
-                    styles.frequencyText,
-                    { color: active ? '#fff' : colors.text },
-                  ]}
-                >
+                <Text style={[styles.frequencyText, { color: active ? '#fff' : colors.text }]}>
                   {frequency}
                 </Text>
               </TouchableOpacity>
@@ -606,13 +681,50 @@ export default function AddMedicationScreen() {
             { backgroundColor: colors.paper, borderColor: colors.border, color: colors.text },
           ]}
           value={medication.instructions}
-          onChangeText={(text) =>
-            setMedication((previous) => ({ ...previous, instructions: text }))
-          }
+          onChangeText={(text) => setMedication((previous) => ({ ...previous, instructions: text }))}
           placeholder="Take with food"
           placeholderTextColor={colors.textSecondary}
           multiline
         />
+
+        <TouchableOpacity
+          style={[styles.secondaryActionButton, { borderColor: colors.border }]}
+          onPress={runSafetyCheck}
+          disabled={isCheckingSafety}
+        >
+          <Text style={[styles.secondaryActionTextButton, { color: colors.text }]}>
+            {isCheckingSafety ? 'Checking current meds...' : 'Check with current meds'}
+          </Text>
+        </TouchableOpacity>
+
+        {safetyResult?.alerts?.length ? (
+          <View style={[styles.safetyPanel, { backgroundColor: colors.paper, borderColor: colors.border }]}>
+            <Text style={[styles.safetyPanelTitle, { color: colors.text }]}>Interaction review</Text>
+            {safetyResult.alerts.slice(0, 3).map((alert, index) => (
+              <View key={`${alert.medications.join('-')}-${index}`} style={styles.safetyItem}>
+                <Text
+                  style={[
+                    styles.safetySeverity,
+                    { color: alert.severity === 'high' ? colors.accent : colors.primary },
+                  ]}
+                >
+                  {alert.severity.toUpperCase()}
+                </Text>
+                <Text style={[styles.safetySummary, { color: colors.text }]}>{alert.summary}</Text>
+                <Text style={[styles.safetyEvidence, { color: colors.textSecondary }]}>
+                  {alert.evidence_excerpt || alert.section}
+                </Text>
+              </View>
+            ))}
+          </View>
+        ) : null}
+
+        {safetyError ? (
+          <View style={[styles.safetyPanel, { backgroundColor: colors.paper, borderColor: colors.border }]}>
+            <Text style={[styles.safetyPanelTitle, { color: colors.text }]}>Interaction review</Text>
+            <Text style={[styles.safetyEvidence, { color: colors.textSecondary }]}>{safetyError}</Text>
+          </View>
+        ) : null}
 
         <TouchableOpacity
           style={[styles.saveButton, { backgroundColor: colors.primary }]}
@@ -745,6 +857,9 @@ const styles = StyleSheet.create({
   processingText: {
     marginTop: 8,
     fontSize: 13,
+  },
+  patientWrap: {
+    marginBottom: 16,
   },
   sectionCard: {
     borderRadius: 22,
@@ -883,6 +998,44 @@ const styles = StyleSheet.create({
   textArea: {
     minHeight: 90,
     textAlignVertical: 'top',
+  },
+  secondaryActionButton: {
+    borderWidth: 1,
+    borderRadius: 14,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 14,
+  },
+  secondaryActionTextButton: {
+    fontWeight: '700',
+  },
+  safetyPanel: {
+    borderWidth: 1,
+    borderRadius: 16,
+    padding: 14,
+    marginTop: 14,
+  },
+  safetyPanelTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  safetyItem: {
+    marginTop: 12,
+  },
+  safetySeverity: {
+    fontSize: 11,
+    fontWeight: '800',
+  },
+  safetySummary: {
+    marginTop: 3,
+    fontSize: 13,
+    fontWeight: '700',
+    lineHeight: 18,
+  },
+  safetyEvidence: {
+    marginTop: 4,
+    fontSize: 12,
+    lineHeight: 18,
   },
   saveButton: {
     paddingVertical: 16,
