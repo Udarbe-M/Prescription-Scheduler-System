@@ -4,11 +4,18 @@
   "version": "1.0.0",
   "scripts": {
     "start": "expo start",
+    "start:go": "expo start --go",
+    "start:dev-client": "expo start --dev-client",
     "reset-project": "node ./scripts/reset-project.js",
     "android": "expo start --android",
+    "android:dev": "expo start --dev-client --android",
     "ios": "expo start --ios",
+    "ios:dev": "expo start --dev-client --ios",
     "web": "expo start --web",
-    "lint": "expo lint"
+    "lint": "expo lint",
+    "prebuild": "expo prebuild",
+    "build:dev:android": "npx eas build --profile development --platform android",
+    "build:dev:ios": "npx eas build --profile development --platform ios"
   },
   "dependencies": {
     "@expo/vector-icons": "^15.0.3",
@@ -20,6 +27,7 @@
     "expo": "~54.0.33",
     "expo-camera": "^17.0.10",
     "expo-constants": "~18.0.13",
+    "expo-dev-client": "~6.0.21",
     "expo-font": "~14.0.11",
     "expo-haptics": "~15.0.8",
     "expo-image": "~3.0.11",
