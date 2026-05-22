@@ -1,0 +1,252 @@
+import axios from 'axios';
+
+// ============================================================================
+// API CONFIGURATION
+// ============================================================================
+
+const API_BASE_URL = __DEV__ 
+   ? 'http://192.168.2.113:8081'  // Development: Your computer's local IP
+   : 'http://127.0.0.1:8000'; // Production: Your deployed API https://your-api-domain.com
+
+interface ExtractedData {
+  name?: string;
+  dosage?: string;
+  frequency?: 'daily' | 'twice' | 'thrice' | 'weekly';
+  instructions?: string;
+}
+
+interface APIResponse {
+  success: boolean;
+  prediction: string;
+  confidence: number;
+  filename?: string;
+  processing_time_ms?: number;
+}
+
+// ============================================================================
+// MAIN OCR FUNCTION
+// ============================================================================
+
+export const extractTextFromImage = async (imageUri: string): Promise<string> => {
+  try {
+    console.log('🔍 Starting OCR with FastAPI backend...');
+    console.log('Image URI:', imageUri);
+    
+    // Convert image URI to base64
+    const base64Image = await uriToBase64(imageUri);
+    
+    console.log('✓ Image converted to base64');
+    console.log('Sending request to:', `${API_BASE_URL}/predict-base64`);
+    
+    // Call FastAPI endpoint
+    const response = await axios.post<APIResponse>(
+      `${API_BASE_URL}/predict-base64`,
+      {
+        image: base64Image,
+        filename: 'prescription.jpg'
+      },
+      {
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        timeout: 30000,
+      }
+    );
+    
+    if (response.data.success) {
+      console.log('✅ OCR successful!');
+      console.log('Prediction:', response.data.prediction);
+      console.log('Confidence:', (response.data.confidence * 100).toFixed(1) + '%');
+      console.log('Processing time:', response.data.processing_time_ms + 'ms');
+      
+      return response.data.prediction;
+    } else {
+      throw new Error('API returned unsuccessful response');
+    }
+    
+  } catch (error: any) {
+    console.error('❌ OCR API Error:', error.message);
+    
+    if (error.code === 'ECONNABORTED') {
+      throw new Error('Request timeout. Server might be slow or unreachable.');
+    } else if (error.response) {
+      const statusCode = error.response.status;
+      if (statusCode === 503) {
+        throw new Error('Model not loaded on server. Please check server logs.');
+      } else if (statusCode === 500) {
+        throw new Error('Server error during prediction. Check image format.');
+      } else {
+        throw new Error(`Server error: ${error.response.data.detail || 'Unknown error'}`);
+      }
+    } else if (error.request) {
+      console.error('Cannot connect to API server');
+      console.log('Falling back to mock OCR...');
+      return await extractTextFromImageMock(imageUri);
+    } else {
+      throw error;
+    }
+  }
+};
+
+// ============================================================================
+// CONVERT URI TO BASE64
+// ============================================================================
+
+async function uriToBase64(uri: string): Promise<string> {
+  try {
+    // Fetch the image as a blob
+    const response = await fetch(uri);
+    const blob = await response.blob();
+    
+    // Convert blob to base64
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        const base64data = reader.result as string;
+        // Remove the data URL prefix (e.g., "data:image/jpeg;base64,")
+        const base64 = base64data.split(',')[1] || base64data;
+        resolve(base64);
+      };
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+  } catch (error) {
+    console.error('Error converting image to base64:', error);
+    throw new Error('Failed to convert image to base64');
+  }
+}
+
+// ============================================================================
+// MOCK OCR FALLBACK
+// ============================================================================
+
+export const extractTextFromImageMock = async (imageUri: string): Promise<string> => {
+  console.log('⚠️ Using MOCK OCR (API unavailable)');
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  
+  const mockPrescriptions = [
+    `Amoxicillin 500mg`,
+    `Ibuprofen 400mg`,
+    `Metformin 850mg`,
+    `Lisinopril 10mg`,
+    `Aspirin 100mg`,
+  ];
+  
+  const randomIndex = Math.floor(Math.random() * mockPrescriptions.length);
+  return mockPrescriptions[randomIndex];
+};
+
+// ============================================================================
+// PARSE PRESCRIPTION TEXT
+// ============================================================================
+
+export const parsePrescriptionText = (text: string): ExtractedData => {
+  const extracted: ExtractedData = {};
+  const lowerText = text.toLowerCase();
+  
+  console.log('📋 Parsing text:', text);
+  
+  // Extract medication name
+  const lines = text.split('\n').map(l => l.trim()).filter(l => l.length > 0);
+  
+  if (lines.length > 0) {
+    let firstLine = lines[0];
+    firstLine = firstLine.replace(/^(medication|med|rx|drug):\s*/i, '');
+    
+    const nameMatch = firstLine.match(/^([A-Za-z]+)/);
+    if (nameMatch) {
+      extracted.name = nameMatch[1].charAt(0).toUpperCase() + nameMatch[1].slice(1).toLowerCase();
+    }
+  }
+  
+  // Extract dosage
+  const dosageRegex = /(\d+(?:\.\d+)?)\s*(mg|g|ml|mcg|µg|tablet|tab|cap|capsule|pill|unit)/i;
+  const dosageMatch = text.match(dosageRegex);
+  if (dosageMatch) {
+    extracted.dosage = dosageMatch[0];
+  }
+  
+  // Extract frequency
+  if (lowerText.includes('three times') || lowerText.includes('thrice') || lowerText.includes('3 times')) {
+    extracted.frequency = 'thrice';
+  } else if (lowerText.includes('twice') || lowerText.includes('two times') || lowerText.includes('2 times')) {
+    extracted.frequency = 'twice';
+  } else if (lowerText.includes('weekly') || lowerText.includes('week')) {
+    extracted.frequency = 'weekly';
+  } else {
+    extracted.frequency = 'daily';
+  }
+  
+  // Extract instructions
+  const instructionKeywords = [
+    { keywords: ['with food', 'after eating', 'after meal'], instruction: 'Take with food' },
+    { keywords: ['before meal', 'before eating'], instruction: 'Take before meals' },
+    { keywords: ['empty stomach'], instruction: 'Take on empty stomach' },
+    { keywords: ['bedtime', 'before bed'], instruction: 'Take at bedtime' },
+    { keywords: ['morning'], instruction: 'Take in the morning' },
+    { keywords: ['evening', 'night'], instruction: 'Take in the evening' },
+    { keywords: ['as needed'], instruction: 'Take as needed' },
+  ];
+  
+  for (const { keywords, instruction } of instructionKeywords) {
+    if (keywords.some(keyword => lowerText.includes(keyword))) {
+      extracted.instructions = instruction;
+      break;
+    }
+  }
+  
+  console.log('📋 Parsed prescription:', extracted);
+  return extracted;
+};
+
+// ============================================================================
+// API HEALTH CHECK
+// ============================================================================
+
+export const testAPIConnection = async (): Promise<{
+  connected: boolean;
+  modelLoaded: boolean;
+  message: string;
+}> => {
+  try {
+    console.log('Testing connection to:', `${API_BASE_URL}/health`);
+    
+    const response = await axios.get(`${API_BASE_URL}/health`, {
+      timeout: 5000
+    });
+    
+    const data = response.data;
+    console.log('Health check response:', data);
+    
+    return {
+      connected: true,
+      modelLoaded: data.model_loaded || false,
+      message: data.model_loaded 
+        ? '✅ Connected to API. Model ready!' 
+        : '⚠️ Connected but model not loaded'
+    };
+  } catch (error: any) {
+    console.error('API health check failed:', error.message);
+    return {
+      connected: false,
+      modelLoaded: false,
+      message: `❌ Cannot connect to ${API_BASE_URL}\n\nCheck:\n• Server is running\n• Correct IP address\n• Same WiFi network`
+    };
+  }
+};
+
+export const getModelInfo = async (): Promise<any> => {
+  try {
+    const response = await axios.get(`${API_BASE_URL}/model-info`, {
+      timeout: 5000
+    });
+    return response.data;
+  } catch (error) {
+    console.error('Failed to get model info:', error);
+    return null;
+  }
+};
+
+export const getCurrentAPIUrl = (): string => {
+  return API_BASE_URL;
+};

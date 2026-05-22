@@ -1,0 +1,15 @@
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+backend/.venv/
+backend/__pycache__/
+backend/.pytest_cache/
+backend/.cache/
+backend/*.db
+backend/*.log
+mobile/*.log
+mobile/.vscode/
+mobile/expo-qr.png
+*.pyc
+*.pyo
+.DS_Store

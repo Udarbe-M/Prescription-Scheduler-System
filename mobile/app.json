@@ -1,0 +1,55 @@
+{
+  "expo": {
+    "name": "Prescription Scheduler",
+    "slug": "prescription-scheduler",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/images/icon.png",
+    "userInterfaceStyle": "automatic",
+    "splash": {
+      "image": "./assets/images/splash-icon.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#3b82f6"
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "com.yourcompany.prescriptionscheduler",
+      "infoPlist": {
+        "NSCameraUsageDescription": "This app uses the camera to scan prescriptions.",
+        "NSPhotoLibraryUsageDescription": "This app accesses photos to upload prescription images.",
+        "NSUserNotificationsUsageDescription": "This app uses notifications to remind you when to take your medication."
+      }
+    },
+    "android": {
+      "adaptiveIcon": {
+        "foregroundImage": "./assets/images/android-icon-foreground.png",
+        "backgroundColor": "#3b82f6"
+      },
+      "package": "com.yourcompany.prescriptionscheduler",
+      "permissions": [
+        "CAMERA",
+        "READ_EXTERNAL_STORAGE",
+        "WRITE_EXTERNAL_STORAGE",
+        "RECEIVE_BOOT_COMPLETED",
+        "VIBRATE"
+      ]
+    },
+    "plugins": [
+      "expo-router",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow Prescription Scheduler to access your photos for prescription scanning.",
+          "cameraPermission": "Allow Prescription Scheduler to use your camera for prescription scanning.",
+          "microphonePermission": false
+        }
+      ],
+      "expo-camera",
+      "expo-notifications",
+      "expo-sqlite"
+    ]
+  }
+}

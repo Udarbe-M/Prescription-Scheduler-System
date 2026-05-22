@@ -1,0 +1,182 @@
+import axios from 'axios';
+
+interface ExtractedData {
+  name?: string;
+  dosage?: string;
+  frequency?: 'daily' | 'twice' | 'thrice' | 'weekly';
+  instructions?: string;
+}
+
+// Mock OCR for development - replace with real OCR API in production
+export const extractTextFromImage = async (imageUri: string): Promise<string> => {
+  // Simulate API call delay
+  await new Promise(resolve => setTimeout(resolve, 1500));
+  
+  // Mock prescription text - in production, use:
+  // 1. Google Cloud Vision API
+  // 2. Azure Computer Vision
+  // 3. Tesseract.js (open source)
+  // 4. Other OCR services
+  
+  const mockPrescriptions = [
+    `PRESCRIPTION
+    Patient: John Doe
+    Medication: Amoxicillin 500mg
+    Directions: Take one capsule three times daily
+    With food
+    Refills: 0`,
+    
+    `Dr. Smith's Clinic
+    Rx: Lisinopril 10mg
+    Sig: Take once daily in the morning
+    Dispense: 30 tablets
+    Do not take with potassium supplements`,
+    
+    `Medication: Metformin 850mg
+    Take twice daily with meals
+    Start with one tablet daily for first week
+    Monitor blood sugar levels`,
+    
+    `PRESCRIPTION
+    Ibuprofen 400mg
+    Take every 6 hours as needed for pain
+    Do not exceed 4 tablets in 24 hours
+    Take with food or milk`,
+  ];
+  
+  // Return random mock prescription
+  const randomIndex = Math.floor(Math.random() * mockPrescriptions.length);
+  return mockPrescriptions[randomIndex];
+};
+
+// Parse extracted text to find medication information
+export const parsePrescriptionText = (text: string): ExtractedData => {
+  const extracted: ExtractedData = {};
+  const lowerText = text.toLowerCase();
+  
+  // Look for dosage pattern (e.g., 500mg, 10mg, 850mg)
+  const dosageRegex = /(\d+(?:\.\d+)?)\s*(mg|g|ml|mcg|µg|tablet|tab|cap|capsule|pill)\b/i;
+  const dosageMatch = text.match(dosageRegex);
+  if (dosageMatch) {
+    extracted.dosage = dosageMatch[0];
+  }
+  
+  // Look for frequency with times per day
+  const frequencyRegex = /(\d+)\s*times?\s*(?:a|per|)\s*(day|week)\b/i;
+  const freqMatch = lowerText.match(frequencyRegex);
+  
+  if (freqMatch) {
+    const times = parseInt(freqMatch[1]);
+    const period = freqMatch[2];
+    
+    if (period === 'day') {
+      if (times === 1) extracted.frequency = 'daily';
+      else if (times === 2) extracted.frequency = 'twice';
+      else if (times === 3) extracted.frequency = 'thrice';
+    } else if (period === 'week') {
+      extracted.frequency = 'weekly';
+    }
+  } else {
+    // Fallback to keyword matching
+    if (lowerText.includes('three times') || lowerText.includes('thrice') || lowerText.includes('3 times')) {
+      extracted.frequency = 'thrice';
+    } else if (lowerText.includes('twice') || lowerText.includes('two times') || lowerText.includes('2 times')) {
+      extracted.frequency = 'twice';
+    } else if (lowerText.includes('once') || lowerText.includes('daily') || lowerText.includes('1 time')) {
+      extracted.frequency = 'daily';
+    } else if (lowerText.includes('weekly') || lowerText.includes('week')) {
+      extracted.frequency = 'weekly';
+    }
+  }
+  
+  // Common medication names (expand this list)
+  const commonMeds = [
+    'amoxicillin', 'ibuprofen', 'paracetamol', 'aspirin', 'metformin',
+    'atorvastatin', 'lisinopril', 'levothyroxine', 'metoprolol', 'prednisone',
+    'omeprazole', 'sertraline', 'simvastatin', 'amlodipine', 'hydrochlorothiazide'
+  ];
+  
+  // Try to find medication name
+  for (const med of commonMeds) {
+    if (lowerText.includes(med)) {
+      extracted.name = med.charAt(0).toUpperCase() + med.slice(1);
+      break;
+    }
+  }
+  
+  // If not found in common list, look for capitalized words that might be medication names
+  if (!extracted.name) {
+    const words = text.split(/\s+/);
+    for (const word of words) {
+      if (word.length > 3 && /^[A-Z][a-z]+$/.test(word)) {
+        // Check if it's not a common non-medication word
+        const commonNonMeds = ['Patient', 'Doctor', 'Clinic', 'Hospital', 'Prescription', 'Rx', 'Sig'];
+        if (!commonNonMeds.includes(word)) {
+          extracted.name = word;
+          break;
+        }
+      }
+    }
+  }
+  
+  // Extract instructions from common phrases
+  const instructionKeywords = [
+    { keyword: 'with food', instruction: 'Take with food' },
+    { keyword: 'after eating', instruction: 'Take after meals' },
+    { keyword: 'before meal', instruction: 'Take before meals' },
+    { keyword: 'after meal', instruction: 'Take after meals' },
+    { keyword: 'empty stomach', instruction: 'Take on empty stomach' },
+    { keyword: 'bedtime', instruction: 'Take at bedtime' },
+    { keyword: 'before bed', instruction: 'Take before bed' },
+    { keyword: 'morning', instruction: 'Take in the morning' },
+    { keyword: 'evening', instruction: 'Take in the evening' },
+    { keyword: 'as needed', instruction: 'Take as needed' },
+    { keyword: 'with water', instruction: 'Take with water' },
+  ];
+  
+  for (const { keyword, instruction } of instructionKeywords) {
+    if (lowerText.includes(keyword) && !extracted.instructions) {
+      extracted.instructions = instruction;
+    }
+  }
+  
+  return extracted;
+};
+
+// Real OCR API integration example (uncomment and configure for production)
+/*
+export const extractTextFromImageReal = async (imageUri: string): Promise<string> => {
+  // Example using Google Cloud Vision API
+  const apiKey = 'YOUR_GOOGLE_CLOUD_API_KEY';
+  const apiUrl = 'https://vision.googleapis.com/v1/images:annotate';
+  
+  // Convert image to base64
+  const base64Image = await FileSystem.readAsStringAsync(imageUri, {
+    encoding: FileSystem.EncodingType.Base64,
+  });
+  
+  const requestBody = {
+    requests: [
+      {
+        image: {
+          content: base64Image,
+        },
+        features: [
+          {
+            type: 'TEXT_DETECTION',
+          },
+        ],
+      },
+    ],
+  };
+  
+  try {
+    const response = await axios.post(`${apiUrl}?key=${apiKey}`, requestBody);
+    const text = response.data.responses[0].fullTextAnnotation?.text || '';
+    return text;
+  } catch (error) {
+    console.error('OCR API error:', error);
+    throw new Error('Failed to extract text from image');
+  }
+};
+*/
